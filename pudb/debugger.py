@@ -667,6 +667,7 @@ class DebuggerUI(FrameVarInfoKeeper):
 
         self.cmdline_contents = urwid.SimpleFocusListWalker([])
         self.cmdline_list = urwid.ListBox(self.cmdline_contents)
+        self.cmdline_list_sigwrap = SignalWrap(self.cmdline_list)
         self.cmdline_edit = urwid.Edit([
             ("command line prompt", ">>> ")
             ])
@@ -686,7 +687,7 @@ class DebuggerUI(FrameVarInfoKeeper):
 
         self.cmdline_pile = urwid.Pile([
             ("flow", urwid.Text("Command line: [Ctrl-X]")),
-            ("weight", 1, urwid.AttrMap(self.cmdline_list, "command line output")),
+            ("weight", 1, urwid.AttrMap(self.cmdline_list_sigwrap, "command line output")),
             ("flow", self.cmdline_edit_bar),
             ])
         self.cmdline_sigwrap = SignalWrap(
@@ -1616,6 +1617,19 @@ class DebuggerUI(FrameVarInfoKeeper):
         def cmdline_history_next(w, size, key):
             cmdline_history_browse(1)
 
+        def cmdline_history_copy(w, size, key):
+            cmd = None
+            cmdline_content_attr = self.cmdline_list.get_focus()[0]
+            if cmdline_content_attr.attr_map.get(None) == 'command line input':
+                cmd = cmdline_content_attr.original_widget.text.lstrip('>>> ')
+                self.cmdline_edit.edit_text = cmd
+
+                self.columns.set_focus(self.lhs_col)
+                self.cmdline_pile.set_focus(self.cmdline_edit_bar)
+                self.lhs_col.set_focus(self.cmdline_sigwrap)
+
+                cmdline_end_of_line(w, size, key)
+
         def cmdline_start_of_line(w, size, key):
             self.cmdline_edit.edit_pos = 0
 
@@ -1663,6 +1677,8 @@ class DebuggerUI(FrameVarInfoKeeper):
         self.cmdline_edit_sigwrap.listen("ctrl e", cmdline_end_of_line)
         self.cmdline_edit_sigwrap.listen("ctrl w", cmdline_del_word)
         self.cmdline_edit_sigwrap.listen("ctrl u", cmdline_del_to_start_of_line)
+
+        self.cmdline_list_sigwrap.listen("enter", cmdline_history_copy)
 
         self.top.listen("ctrl x", toggle_cmdline_focus)
 
