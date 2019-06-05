@@ -31,6 +31,7 @@ THE SOFTWARE.
 # {{{ constants and imports
 
 import urwid
+import inspect
 
 try:
     import numpy
@@ -39,14 +40,14 @@ except ImportError:
     HAVE_NUMPY = 0
 
 from pudb.py3compat import PY3, execfile, raw_input, xrange, \
-        integer_types, string_types
+        integer_types, string_types, text_type
 if PY3:
     ELLIPSIS = '…'
 else:
     ELLIPSIS = unicode('…', 'utf-8')  # noqa: F821
 
-from pudb.debugger import CONFIG
 from pudb.ui_tools import text_width
+
 # }}}
 
 
@@ -68,6 +69,9 @@ class FrameVarInfo(object):
 
 class InspectInfo(object):
     def __init__(self):
+        # Do not globalize: cyclic import
+        from pudb.debugger import CONFIG
+
         self.show_detail = False
         self.display_type = CONFIG["stringifier"]
         self.highlighted = False
@@ -119,6 +123,9 @@ class VariableWidget(urwid.FlowWidget):
         self.attr_prefix = attr_prefix or "var"
         self.watch_expr = watch_expr
         if iinfo is None:
+            # Do not globalize: cyclic import
+            from pudb.debugger import CONFIG
+
             self.wrap = CONFIG["wrap_variables"]
         else:
             self.wrap = iinfo.wrap
@@ -256,11 +263,11 @@ custom_stringifier_dict = {}
 
 def type_stringifier(value):
     if HAVE_NUMPY and isinstance(value, numpy.ndarray):
-        return "ndarray %s %s" % (value.dtype, value.shape)
+        return text_type("ndarray %s %s") % (value.dtype, value.shape)
 
     elif isinstance(value, STR_SAFE_TYPES):
         try:
-            return str(value)
+            return text_type(value)
         except Exception:
             pass
 
@@ -273,21 +280,31 @@ def type_stringifier(value):
             pass
         else:
             if isinstance(result, string_types):
-                return result
+                return text_type(result)
 
     elif type(value) in [set, frozenset, list, tuple, dict]:
-        return "%s (%s)" % (type(value).__name__, len(value))
+        return text_type("%s (%s)") % (type(value).__name__, len(value))
 
-    return type(value).__name__
+    return text_type(type(value).__name__)
 
 
 def get_stringifier(iinfo):
+    """Return a function that turns an object into a Unicode text object."""
+
     if iinfo.display_type == "type":
         return type_stringifier
     elif iinfo.display_type == "repr":
-        return repr
+        if PY3:
+            return repr
+        else:
+            return lambda value: repr(value).decode("utf-8")
     elif iinfo.display_type == "str":
-        return str
+        if PY3:
+            return str
+        else:
+            return lambda value: (
+                    value.decode("utf-8") if isinstance(value, bytes)
+                    else text_type(value))
     else:
         try:
             if not custom_stringifier_dict:  # Only execfile once
@@ -298,17 +315,18 @@ def get_stringifier(iinfo):
             from traceback import print_exc
             print_exc()
             raw_input("Hit enter:")
-            return lambda value: "ERROR: Invalid custom stringifier file."
+            return lambda value: text_type("ERROR: Invalid custom stringifier file.")
         else:
             if "pudb_stringifier" not in custom_stringifier_dict:
                 print("%s does not contain a function named pudb_stringifier at "
                       "the module level." % iinfo.display_type)
                 raw_input("Hit enter:")
-                return lambda value: ("ERROR: Invalid custom stringifier file: "
-                "pudb_stringifer not defined.")
+                return lambda value: text_type(
+                        "ERROR: Invalid custom stringifier file: "
+                        "pudb_stringifer not defined.")
             else:
                 return (lambda value:
-                    str(custom_stringifier_dict["pudb_stringifier"](value)))
+                    text_type(custom_stringifier_dict["pudb_stringifier"](value)))
 
 
 # {{{ tree walking
@@ -445,7 +463,7 @@ class ValueWalker:
 
                 try:
                     attr_value = getattr(value, key)
-                    if callable(attr_value) and not iinfo.show_methods:
+                    if inspect.ismethod(attr_value) and not iinfo.show_methods:
                         cnt_omitted_methods += 1
                         continue
                 except Exception:

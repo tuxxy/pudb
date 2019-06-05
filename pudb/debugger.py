@@ -433,11 +433,19 @@ class Debugger(bdb.Bdb):
             self.interaction(frame, exc_tuple)
 
     def _runscript(self, filename):
-        # Start with fresh empty copy of globals and locals and tell the script
-        # that it's being run as __main__ to avoid scripts being able to access
-        # the debugger's namespace.
-        globals_ = {"__name__": "__main__", "__file__": filename}
-        locals_ = globals_
+        # Provide separation from current __main__, which is likely
+        # pudb.__main__ run.  Preserving its namespace is not important, and
+        # having the script share it ensures that, e.g., pickle can find
+        # types defined there:
+        # https://github.com/inducer/pudb/issues/331
+
+        import __main__
+        __main__.__dict__.clear()
+        __main__.__dict__.update({
+            "__name__": "__main__",
+            "__file__": filename,
+            "__builtins__": __builtins__,
+            })
 
         # When bdb sets tracing, a number of call and line events happens
         # BEFORE debugger even reaches user's code (and the exact sequence of
@@ -456,7 +464,8 @@ class Debugger(bdb.Bdb):
         from pudb import set_interrupt_handler
         set_interrupt_handler()
 
-        self.run(statement, globals=globals_, locals=locals_)
+        # Implicitly runs in the namespace of __main__.
+        self.run(statement)
 
 # }}}
 
@@ -946,6 +955,9 @@ class DebuggerUI(FrameVarInfoKeeper):
         self.var_list.listen("[", partial(change_rhs_box, 'variables', 0, -1))
         self.var_list.listen("]", partial(change_rhs_box, 'variables', 0, 1))
 
+        self.var_list.listen("j", self.rhs_scroll_down)
+        self.var_list.listen("k", self.rhs_scroll_up)
+
         # }}}
 
         # {{{ stack listeners
@@ -970,6 +982,9 @@ class DebuggerUI(FrameVarInfoKeeper):
 
         self.stack_list.listen("[", partial(change_rhs_box, 'stack', 1, -1))
         self.stack_list.listen("]", partial(change_rhs_box, 'stack', 1, 1))
+
+        self.stack_list.listen("j", self.rhs_scroll_down)
+        self.stack_list.listen("k", self.rhs_scroll_up)
 
         # }}}
 
@@ -1093,6 +1108,8 @@ class DebuggerUI(FrameVarInfoKeeper):
         self.bp_list.listen("[", partial(change_rhs_box, 'breakpoints', 2, -1))
         self.bp_list.listen("]", partial(change_rhs_box, 'breakpoints', 2, 1))
 
+        self.bp_list.listen("j", self.rhs_scroll_down)
+        self.bp_list.listen("k", self.rhs_scroll_up)
         # }}}
 
         # {{{ source listeners
@@ -1569,11 +1586,15 @@ class DebuggerUI(FrameVarInfoKeeper):
             sys.stdin = None
             sys.stderr = sys.stdout = StringIO()
             try:
-                # Don't use cmdline_get_namespace() here, it breaks things in
-                # Python 2 (issue #166).
-                eval(compile(cmd, "<pudb command line>", 'single'),
-                        self.debugger.curframe.f_globals,
-                        self.debugger.curframe.f_locals)
+                # Don't use cmdline_get_namespace() here in Python 2, as it
+                # breaks things (issue #166).
+                if PY3:
+                    eval(compile(cmd, "<pudb command line>", 'single'),
+                         cmdline_get_namespace())
+                else:
+                    eval(compile(cmd, "<pudb command line>", 'single'),
+                         self.debugger.curframe.f_globals,
+                         self.debugger.curframe.f_locals)
             except Exception:
                 tp, val, tb = sys.exc_info()
 
@@ -1956,6 +1977,13 @@ class DebuggerUI(FrameVarInfoKeeper):
     # }}}
 
     # {{{ UI helpers
+    def rhs_scroll_down(self, w, size, key):
+        if key == 'j' and CONFIG['jk_sidebar_scroll']:
+            w.keypress(size, "down")
+
+    def rhs_scroll_up(self, w, size, key):
+        if key == 'k' and CONFIG['jk_sidebar_scroll']:
+            w.keypress(size, "up")
 
     def translate_ui_stack_index(self, index):
         # note: self-inverse
@@ -2151,7 +2179,7 @@ class DebuggerUI(FrameVarInfoKeeper):
                 self.message("Package 'pygments' not found. "
                         "Syntax highlighting disabled.")
 
-        WELCOME_LEVEL = "e034"  # noqa
+        WELCOME_LEVEL = "e035"  # noqa
         if CONFIG["seen_welcome"] < WELCOME_LEVEL:
             CONFIG["seen_welcome"] = WELCOME_LEVEL
             from pudb import VERSION
@@ -2167,6 +2195,15 @@ class DebuggerUI(FrameVarInfoKeeper):
                     "If you're new here, welcome! The help screen "
                     "(invoked by hitting '?' after this message) should get you "
                     "on your way.\n"
+
+                    "\nChanges in version 2019.1:\n\n"
+                    "- Allow 'space' as a key to expand variables (Enrico Troeger)\n"
+                    "- Have a persistent setting on variable visibility \n"
+                    "  (Enrico Troeger)\n"
+                    "- Enable/partially automate opening the debugger in another \n"
+                    "  terminal (Anton Barkovsky)\n"
+                    "- Make sidebar scrollable with j/k (Clayton Craft)\n"
+                    "- Bug fixes.\n"
 
                     "\nChanges in version 2018.1:\n\n"
                     "- Bug fixes.\n"
